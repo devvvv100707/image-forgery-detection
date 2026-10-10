@@ -94,7 +94,11 @@ def preprocess_image(
     return tensor
 
 
-def preview_ela_image(image: Image.Image) -> Image.Image:
+def preview_ela_image(
+    image: Image.Image,
+    quality: int = config.ELA_QUALITY,
+    scale: float = config.ELA_SCALE,
+) -> Image.Image:
     """ELA visualization at the same working resolution used before the CNN resize."""
     prepared = limit_max_side(image.convert("RGB"), max_side=config.MAX_SIDE)
-    return Image.fromarray(compute_ela(prepared), mode="RGB")
+    return Image.fromarray(compute_ela(prepared, quality=quality, scale=scale), mode="RGB")

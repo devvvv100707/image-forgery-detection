@@ -86,6 +86,44 @@ def test_plot_name_validation(client, tmp_path, monkeypatch):
     assert missing.status_code == 404
 
 
+def test_health_and_predict_aliases(client, tmp_path, monkeypatch):
+    import numpy as np
+
+    checkpoint = tmp_path / "model.pt"
+    model = build_model(dropout=0.0)
+    torch.save({"state_dict": model.state_dict(), "dropout": 0.0}, checkpoint)
+    monkeypatch.setattr(config, "CHECKPOINT_PATH", checkpoint)
+    alias = client.get("/health")
+    original = client.get("/api/health")
+    assert alias.status_code == 200
+    assert alias.json()["model_ready"] is True
+    assert alias.json()["status"] == original.json()["status"]
+
+    array = np.zeros((48, 48, 3), dtype=np.uint8)
+    array[:, :24] = (20, 40, 80)
+    array[:, 24:] = (220, 180, 40)
+    image = tmp_path / "split.png"
+    Image.fromarray(array).save(image)
+    with image.open("rb") as handle:
+        low = client.post(
+            "/predict",
+            files={"file": ("split.png", handle, "image/png")},
+            data={"quality": "40", "scale": "4"},
+        )
+    with image.open("rb") as handle:
+        high = client.post(
+            "/predict",
+            files={"file": ("split.png", handle, "image/png")},
+            data={"quality": "95", "scale": "30"},
+        )
+    assert low.status_code == 200
+    assert high.status_code == 200
+    assert low.json()["ela_quality"] == 40
+    assert high.json()["ela_scale"] == 30.0
+    assert low.json()["ela_png_base64"] != high.json()["ela_png_base64"]
+    assert 0.0 <= low.json()["model_score"] <= 1.0
+
+
 def test_dataset_status_missing(client, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PREP_REPORT_PATH", tmp_path / "prep_report.json")
     monkeypatch.setattr(config, "MANIFEST_PATH", tmp_path / "manifest.csv")

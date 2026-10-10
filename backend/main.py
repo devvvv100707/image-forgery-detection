@@ -4,7 +4,7 @@ import base64
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -73,6 +73,8 @@ class AnalyzeResponse(BaseModel):
     explanation: str
     ela_png_base64: str
     model_ready: bool = True
+    ela_quality: int
+    ela_scale: float
 
 
 class MetricsResponse(BaseModel):
@@ -99,8 +101,7 @@ def _public_error(status_code: int, detail: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail=detail)
 
 
-@app.get("/api/health", response_model=HealthResponse)
-def health():
+def _health_body() -> HealthResponse:
     service.refresh()
     if service.ready:
         return HealthResponse(status="ok", model_ready=True, detail="Weights loaded.")
@@ -117,8 +118,17 @@ def health():
     )
 
 
-@app.post("/api/analyze", response_model=AnalyzeResponse)
-async def analyze(file: UploadFile = File(...)):
+@app.get("/api/health", response_model=HealthResponse)
+@app.get("/health", response_model=HealthResponse)
+def health():
+    return _health_body()
+
+
+async def _analyze(file: UploadFile, quality: int, scale: float) -> AnalyzeResponse:
+    if quality < 1 or quality > 100:
+        raise _public_error(400, "JPEG quality must be between 1 and 100.")
+    if scale <= 0 or scale > 100:
+        raise _public_error(400, "ELA scale must be greater than 0 and at most 100.")
     service.refresh()
     if not service.ready:
         raise _public_error(503, "Model weights are not available. Analysis cannot run yet.")
@@ -137,7 +147,7 @@ async def analyze(file: UploadFile = File(...)):
     except ElaError:
         raise _public_error(400, "The file could not be decoded as an image.")
     try:
-        result = predict_image(image, model=service.model)
+        result = predict_image(image, model=service.model, quality=quality, scale=scale)
         encoded = base64.b64encode(ela_to_png_bytes(np.asarray(result["ela_image"]))).decode("ascii")
     except PredictError:
         raise _public_error(500, "Inference failed for this image.")
@@ -149,7 +159,27 @@ async def analyze(file: UploadFile = File(...)):
         explanation=result["explanation"],
         ela_png_base64=encoded,
         model_ready=True,
+        ela_quality=result["ela_quality"],
+        ela_scale=result["ela_scale"],
     )
+
+
+@app.post("/api/analyze", response_model=AnalyzeResponse)
+async def analyze(
+    file: UploadFile = File(...),
+    quality: int = Form(config.ELA_QUALITY),
+    scale: float = Form(config.ELA_SCALE),
+):
+    return await _analyze(file, quality, scale)
+
+
+@app.post("/predict", response_model=AnalyzeResponse)
+async def predict_alias(
+    file: UploadFile = File(...),
+    quality: int = Form(config.ELA_QUALITY),
+    scale: float = Form(config.ELA_SCALE),
+):
+    return await _analyze(file, quality, scale)
 
 
 @app.get("/api/metrics", response_model=MetricsResponse)

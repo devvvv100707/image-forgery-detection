@@ -32,13 +32,19 @@ def load_model(checkpoint_path: Path | None = None):
     return model
 
 
-def predict_image(image: Image.Image, model=None, checkpoint_path: Path | None = None) -> dict:
+def predict_image(
+    image: Image.Image,
+    model=None,
+    checkpoint_path: Path | None = None,
+    quality: int = config.ELA_QUALITY,
+    scale: float = config.ELA_SCALE,
+) -> dict:
     if model is None:
         model = load_model(checkpoint_path)
     try:
         rgb = load_rgb(image)
-        tensor = preprocess_image(rgb).unsqueeze(0)
-        ela_image = preview_ela_image(rgb)
+        tensor = preprocess_image(rgb, quality=quality, scale=scale).unsqueeze(0)
+        ela_image = preview_ela_image(rgb, quality=quality, scale=scale)
     except ElaError as exc:
         raise PredictError("The image could not be read.") from exc
     with torch.inference_mode():
@@ -68,6 +74,8 @@ def predict_image(image: Image.Image, model=None, checkpoint_path: Path | None =
         "positive_class": config.CLASS_NAMES[config.LABEL_MANIPULATED],
         "explanation": explanation,
         "ela_image": ela_image,
+        "ela_quality": int(quality),
+        "ela_scale": float(scale),
     }
 
 
