@@ -22,13 +22,7 @@ How it works:
 
 ![How It Works page](docs/images/how-it-works.png)
 
-On a phone:
-
-![Check Image on a narrow screen](docs/images/check-image-phone.png)
-
-Model Results after one CASIA test run. These numbers are that run, not a target:
-
-![Model Results from one CASIA evaluation](docs/images/model-results.png)
+Model Results fills in after `python -m src.evaluate`, and the numbers there are that run.
 
 ## What you need
 
