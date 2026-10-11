@@ -3,14 +3,62 @@
 import argparse
 from pathlib import Path
 
+import numpy as np
 import torch
+from sklearn.metrics import f1_score
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 import config
 from src.dataset import DatasetError, ElaManifestDataset, load_manifest, records_for_split
 from src.model import build_model
 from src.utils import ensure_dir, set_seed, write_json
+
+
+def choose_threshold(scores: np.ndarray, labels: np.ndarray) -> float:
+    """Pick a cutoff on validation scores only. Ties stay closest to 0.5.
+
+    The positive class is edited (label 1). The test split must not be passed here.
+    """
+    fallback = float(config.DECISION_THRESHOLD)
+    if scores.size == 0 or len(set(labels.tolist())) < 2:
+        return fallback
+    best_threshold = fallback
+    best_f1 = -1.0
+    for threshold in np.linspace(0.05, 0.95, 19):
+        predictions = (scores >= threshold).astype(int)
+        score = float(f1_score(labels, predictions, pos_label=config.LABEL_MANIPULATED, zero_division=0))
+        closer = abs(float(threshold) - fallback) < abs(best_threshold - fallback)
+        if score > best_f1 + 1e-6 or (abs(score - best_f1) <= 1e-6 and closer):
+            best_f1 = score
+            best_threshold = float(threshold)
+    return best_threshold
+
+
+def collect_scores(model, loader, device):
+    model.eval()
+    scores = []
+    labels = []
+    with torch.inference_mode():
+        for images, batch_labels in loader:
+            logits = model(images.to(device))
+            scores.append(torch.sigmoid(logits).cpu())
+            labels.append(batch_labels.cpu())
+    return torch.cat(scores).numpy(), torch.cat(labels).numpy().astype(int)
+
+
+def balanced_sampler(records: list[dict]) -> WeightedRandomSampler:
+    """Sample each class equally often, using training-split counts only."""
+    labels = [int(record["label"]) for record in records]
+    counts = {config.LABEL_AUTHENTIC: 0, config.LABEL_MANIPULATED: 0}
+    for label in labels:
+        if label not in counts:
+            raise DatasetError("A training label is neither authentic (0) nor edited (1).")
+        counts[label] += 1
+    if counts[config.LABEL_AUTHENTIC] == 0 or counts[config.LABEL_MANIPULATED] == 0:
+        return None
+    weights = [1.0 / counts[label] for label in labels]
+    return WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
 
 
 def run_epoch(model, loader, criterion, optimizer, device):
@@ -54,10 +102,12 @@ def train(
     val_records = records_for_split(frame, "val")
     if not train_records or not val_records:
         raise DatasetError("Training needs both a train split and a val split in the manifest.")
+    sampler = balanced_sampler(train_records)
     train_loader = DataLoader(
         ElaManifestDataset(train_records, train=True),
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=sampler is None,
+        sampler=sampler,
         num_workers=0,
     )
     val_loader = DataLoader(
@@ -116,10 +166,32 @@ def train(
                 history["stopped_early"] = True
                 print(f"early_stopping epoch={epoch} patience={patience}")
                 break
+    if best_state is None:
+        raise DatasetError("Training did not produce a checkpoint.")
+    model.load_state_dict(best_state)
+    val_scores, val_labels = collect_scores(model, val_loader, device)
+    threshold = choose_threshold(val_scores, val_labels)
+    torch.save(
+        {
+            "state_dict": best_state,
+            "epoch": best_epoch,
+            "val_loss": best_loss,
+            "image_size": config.IMAGE_SIZE,
+            "dropout": config.DROPOUT,
+            "ela_quality": config.ELA_QUALITY,
+            "ela_scale": config.ELA_SCALE,
+            "decision_threshold": threshold,
+            "label_authentic": config.LABEL_AUTHENTIC,
+            "label_manipulated": config.LABEL_MANIPULATED,
+        },
+        checkpoint_path,
+    )
     history["best_epoch"] = best_epoch
     history["best_val_loss"] = best_loss
+    history["decision_threshold"] = threshold
     history["checkpoint"] = checkpoint_path.name
     write_json(history_path, history)
+    print(f"validation_threshold={threshold:.2f}")
     return history
 
 

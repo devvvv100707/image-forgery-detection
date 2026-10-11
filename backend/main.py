@@ -1,6 +1,7 @@
 """FastAPI app. Starting the server does not train a model."""
 
 import base64
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -65,16 +66,43 @@ class HealthResponse(BaseModel):
     detail: str
 
 
+class RegionModel(BaseModel):
+    x: float
+    y: float
+    w: float
+    h: float
+    severity: str
+    mean_error: float
+
+
+class ElaStatsModel(BaseModel):
+    mean_error: float
+    max_error: float
+    histogram: list[int]
+    uniform_area_pct: float
+
+
 class AnalyzeResponse(BaseModel):
     predicted_class: str
     model_score: float
+    score: float
+    label: str
+    threshold: float
     score_label: str
     positive_class: str
     explanation: str
     ela_png_base64: str
+    ela_map_png_base64: str
     model_ready: bool = True
     ela_quality: int
     ela_scale: float
+    inference_ms: float
+    image_width: int
+    image_height: int
+    file_size_bytes: int
+    sha256: str
+    ela_stats: ElaStatsModel
+    regions: list[RegionModel]
 
 
 class MetricsResponse(BaseModel):
@@ -124,11 +152,31 @@ def health():
     return _health_body()
 
 
-async def _analyze(file: UploadFile, quality: int, scale: float) -> AnalyzeResponse:
-    if quality < 1 or quality > 100:
+def _parse_quality(raw: str | None) -> int:
+    if raw is None or raw.strip() == "":
+        return int(config.ELA_QUALITY)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise _public_error(400, "JPEG quality must be a whole number from 1 to 100.")
+    if value < 1 or value > 100:
         raise _public_error(400, "JPEG quality must be between 1 and 100.")
-    if scale <= 0 or scale > 100:
+    return value
+
+
+def _parse_scale(raw: str | None) -> float:
+    if raw is None or raw.strip() == "":
+        return float(config.ELA_SCALE)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise _public_error(400, "ELA scale must be a number greater than 0 and at most 100.")
+    if value <= 0 or value > 100:
         raise _public_error(400, "ELA scale must be greater than 0 and at most 100.")
+    return value
+
+
+async def _analyze(file: UploadFile, quality: int, scale: float) -> AnalyzeResponse:
     service.refresh()
     if not service.ready:
         raise _public_error(503, "Model weights are not available. Analysis cannot run yet.")
@@ -151,35 +199,48 @@ async def _analyze(file: UploadFile, quality: int, scale: float) -> AnalyzeRespo
         encoded = base64.b64encode(ela_to_png_bytes(np.asarray(result["ela_image"]))).decode("ascii")
     except PredictError:
         raise _public_error(500, "Inference failed for this image.")
+    except Exception:
+        raise _public_error(500, "Analysis could not be completed.")
     return AnalyzeResponse(
         predicted_class=result["predicted_class"],
         model_score=result["model_score"],
+        score=result["score"],
+        label=result["predicted_class"],
+        threshold=result["threshold"],
         score_label=result["score_label"],
         positive_class=result["positive_class"],
         explanation=result["explanation"],
         ela_png_base64=encoded,
+        ela_map_png_base64=encoded,
         model_ready=True,
         ela_quality=result["ela_quality"],
         ela_scale=result["ela_scale"],
+        inference_ms=result["inference_ms"],
+        image_width=result["image_width"],
+        image_height=result["image_height"],
+        file_size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        ela_stats=result["ela_stats"],
+        regions=result["regions"],
     )
 
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def analyze(
     file: UploadFile = File(...),
-    quality: int = Form(config.ELA_QUALITY),
-    scale: float = Form(config.ELA_SCALE),
+    quality: str | None = Form(None),
+    scale: str | None = Form(None),
 ):
-    return await _analyze(file, quality, scale)
+    return await _analyze(file, _parse_quality(quality), _parse_scale(scale))
 
 
 @app.post("/predict", response_model=AnalyzeResponse)
 async def predict_alias(
     file: UploadFile = File(...),
-    quality: int = Form(config.ELA_QUALITY),
-    scale: float = Form(config.ELA_SCALE),
+    quality: str | None = Form(None),
+    scale: str | None = Form(None),
 ):
-    return await _analyze(file, quality, scale)
+    return await _analyze(file, _parse_quality(quality), _parse_scale(scale))
 
 
 @app.get("/api/metrics", response_model=MetricsResponse)

@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from sklearn.metrics import (
     accuracy_score,
+    balanced_accuracy_score,
     confusion_matrix,
     f1_score,
     precision_recall_fscore_support,
@@ -116,7 +117,8 @@ def evaluate(
     logits = torch.cat(logits_all)
     labels = torch.cat(labels_all).numpy().astype(int)
     scores = torch.sigmoid(logits).numpy()
-    predictions = (scores >= config.DECISION_THRESHOLD).astype(int)
+    threshold = float(checkpoint.get("decision_threshold", config.DECISION_THRESHOLD))
+    predictions = (scores >= threshold).astype(int)
     labels_order = [0, 1]
     matrix = confusion_matrix(labels, predictions, labels=labels_order)
     names = [config.CLASS_NAMES[index] for index in labels_order]
@@ -136,14 +138,21 @@ def evaluate(
     metrics = {
         "status": "complete",
         "positive_class": positive,
-        "decision_threshold": config.DECISION_THRESHOLD,
+        "decision_threshold": threshold,
         "score_meaning": (
-            "Precision, recall, and F1 use a 0.5 threshold on the sigmoid of the logit. "
-            "That score is a model score, not a calibrated probability."
+            "Precision, recall, and F1 use the validation-chosen threshold on the sigmoid of the logit. "
+            "That score is a model score, not a calibrated probability. "
+            "Older checkpoints without a saved threshold use 0.5."
         ),
         "test_samples": int(total),
         "test_class_counts": {name: int(support[index]) for index, name in enumerate(names)},
         "accuracy": float(accuracy_score(labels, predictions)),
+        "balanced_accuracy": (
+            float(balanced_accuracy_score(labels, predictions))
+            if len(set(labels.tolist())) > 1
+            else float(accuracy_score(labels, predictions))
+        ),
+        "majority_class_accuracy": float(max(support) / support.sum()) if support.sum() else 0.0,
         "precision": float(precision_score(labels, predictions, pos_label=1, zero_division=0)),
         "recall": float(recall_score(labels, predictions, pos_label=1, zero_division=0)),
         "f1": float(f1_score(labels, predictions, pos_label=1, zero_division=0)),
@@ -159,8 +168,11 @@ def evaluate(
             f"The positive class is {positive}. A false positive is an authentic image "
             "classified as manipulated. A false negative is a manipulated image classified "
             "as authentic. Class imbalance and a small test set change how stable these "
-            "numbers are. Validation was used to choose the checkpoint; this test split "
-            "was not used for training or model selection. Results describe this dataset "
+            "numbers are. Accuracy alone can look poor or strong when one class is much larger. "
+            "Compare it with balanced accuracy and with majority_class_accuracy, which is the "
+            "score of always predicting the bigger test class. Validation chose the checkpoint "
+            "and the decision threshold. This test split was not used for training or for that "
+            "choice. Results describe this dataset "
             "and this model only, and they do not show that every kind of edit can be detected."
         ),
         "plots": ["loss_curve.png", "accuracy_curve.png", "confusion_matrix.png"],
@@ -173,6 +185,9 @@ def evaluate(
     lines = [
         "metric,value",
         f"accuracy,{metrics['accuracy']}",
+        f"balanced_accuracy,{metrics['balanced_accuracy']}",
+        f"majority_class_accuracy,{metrics['majority_class_accuracy']}",
+        f"decision_threshold,{metrics['decision_threshold']}",
         f"precision,{metrics['precision']}",
         f"recall,{metrics['recall']}",
         f"f1,{metrics['f1']}",
@@ -188,6 +203,9 @@ def evaluate(
                 f"Positive class: {positive}",
                 f"Test images: {total}",
                 f"Accuracy: {metrics['accuracy']:.4f}",
+                f"Balanced accuracy: {metrics['balanced_accuracy']:.4f}",
+                f"Majority-class accuracy: {metrics['majority_class_accuracy']:.4f}",
+                f"Decision threshold: {metrics['decision_threshold']:.2f}",
                 f"Precision: {metrics['precision']:.4f}",
                 f"Recall: {metrics['recall']:.4f}",
                 f"F1: {metrics['f1']:.4f}",

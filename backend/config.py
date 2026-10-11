@@ -22,18 +22,22 @@ IMAGE_SIZE = (128, 128)
 MAX_SIDE = 1024
 ELA_QUALITY = 90
 ELA_SCALE = 15.0
+# ELA pixels are 0–255. Values below this cutoff are treated as even compression.
+ELA_UNIFORM_CUTOFF = 25.0
+# Connected components are grown from pixels at or above this cutoff.
+ELA_HOTSPOT_CUTOFF = 40.0
 NORM_MEAN = 0.5
 NORM_STD = 0.5
 
 BATCH_SIZE = 8
-EPOCHS = 5
+EPOCHS = 15
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4
 DROPOUT = 0.3
 SEED = 42
 SUBSET_SIZE = 2000
 SPLIT_RATIOS = (0.70, 0.15, 0.15)
-EARLY_STOPPING_PATIENCE = 2
+EARLY_STOPPING_PATIENCE = 4
 
 UPLOAD_MAX_BYTES = 15 * 1024 * 1024
 ALLOWED_UPLOAD_TYPES = {

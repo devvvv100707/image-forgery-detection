@@ -32,7 +32,7 @@ def test_prediction_fields_with_random_weights(tmp_path: Path):
     loaded = load_model(path)
     image = Image.new("RGB", (32, 32), (10, 180, 40))
     result = predict_image(image, model=loaded)
-    assert result["predicted_class"] in config.CLASS_NAMES.values()
+    assert result["predicted_class"] in {*config.CLASS_NAMES.values(), "Not sure"}
     assert 0.0 <= result["model_score"] <= 1.0
     assert "not a calibrated probability" in result["score_label"]
     assert result["ela_image"].size == image.size or result["ela_image"].size[0] <= config.MAX_SIDE

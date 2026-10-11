@@ -1,13 +1,15 @@
 """Load a checkpoint and score one image. Does not invent a result."""
 
 import argparse
+import time
 from pathlib import Path
 
+import numpy as np
 import torch
 from PIL import Image
 
 import config
-from src.ela import ElaError, load_rgb, preprocess_image, preview_ela_image
+from src.ela import ElaError, ela_regions, ela_statistics, load_rgb, preprocess_image, preview_ela_image
 from src.model import build_model
 
 
@@ -27,9 +29,19 @@ def load_model(checkpoint_path: Path | None = None):
         model = build_model(dropout=float(checkpoint.get("dropout", config.DROPOUT)))
         model.load_state_dict(checkpoint["state_dict"])
         model.eval()
+        model.decision_threshold = float(checkpoint.get("decision_threshold", config.DECISION_THRESHOLD))
     except Exception as exc:
         raise PredictError("The checkpoint could not be loaded.") from exc
     return model
+
+
+def verdict_name(score: float, threshold: float) -> str:
+    """Not sure when the score sits within 0.1 of the saved threshold."""
+    if abs(score - threshold) <= 0.1:
+        return "Not sure"
+    if score >= threshold:
+        return config.CLASS_NAMES[config.LABEL_MANIPULATED]
+    return config.CLASS_NAMES[config.LABEL_AUTHENTIC]
 
 
 def predict_image(
@@ -41,8 +53,10 @@ def predict_image(
 ) -> dict:
     if model is None:
         model = load_model(checkpoint_path)
+    started = time.perf_counter()
     try:
         rgb = load_rgb(image)
+        width, height = rgb.size
         tensor = preprocess_image(rgb, quality=quality, scale=scale).unsqueeze(0)
         ela_image = preview_ela_image(rgb, quality=quality, scale=scale)
     except ElaError as exc:
@@ -50,9 +64,21 @@ def predict_image(
     with torch.inference_mode():
         logit = model(tensor)
         score = float(torch.sigmoid(logit).item())
-    label_id = config.LABEL_MANIPULATED if score >= config.DECISION_THRESHOLD else config.LABEL_AUTHENTIC
-    class_name = config.CLASS_NAMES[label_id]
-    if label_id == config.LABEL_MANIPULATED:
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    threshold = float(getattr(model, "decision_threshold", config.DECISION_THRESHOLD))
+    class_name = verdict_name(score, threshold)
+    label_id = config.LABEL_MANIPULATED if class_name == config.CLASS_NAMES[config.LABEL_MANIPULATED] else config.LABEL_AUTHENTIC
+    try:
+        stats = ela_statistics(np.asarray(ela_image))
+        regions = ela_regions(np.asarray(ela_image))
+    except ElaError as exc:
+        raise PredictError("Hotspot regions could not be computed.") from exc
+    if class_name == "Not sure":
+        explanation = (
+            "The model score is close to the decision threshold, so this check is uncertain. "
+            "The number is the sigmoid of one logit, not a calibrated probability, and it is not proof of editing."
+        )
+    elif label_id == config.LABEL_MANIPULATED:
         explanation = (
             "The CNN assigned this ELA image to Potentially Manipulated. "
             "The model score is the sigmoid of one logit. It is not a calibrated probability "
@@ -76,6 +102,13 @@ def predict_image(
         "ela_image": ela_image,
         "ela_quality": int(quality),
         "ela_scale": float(scale),
+        "score": score,
+        "threshold": threshold,
+        "inference_ms": elapsed_ms,
+        "image_width": int(width),
+        "image_height": int(height),
+        "ela_stats": stats,
+        "regions": regions,
     }
 
 

@@ -94,6 +94,61 @@ def preprocess_image(
     return tensor
 
 
+def ela_statistics(ela: np.ndarray) -> dict:
+    """Summaries of one ELA image. Nothing here is a model score."""
+    gray = ela.mean(axis=2) if ela.ndim == 3 else ela.astype(np.float32)
+    gray = gray.astype(np.float32)
+    histogram, _edges = np.histogram(gray, bins=16, range=(0, 256))
+    below = float((gray < config.ELA_UNIFORM_CUTOFF).mean()) if gray.size else 0.0
+    return {
+        "mean_error": float(gray.mean()) if gray.size else 0.0,
+        "max_error": float(gray.max()) if gray.size else 0.0,
+        "histogram": [int(count) for count in histogram.tolist()],
+        "uniform_area_pct": below * 100.0,
+    }
+
+
+def ela_regions(ela: np.ndarray, limit: int = 3) -> list[dict]:
+    """Up to three hotspot boxes from connected components on the ELA map."""
+    try:
+        import cv2
+    except ImportError as exc:
+        raise ElaError("Hotspot regions need OpenCV, which is not installed.") from exc
+    try:
+        gray = ela.mean(axis=2) if ela.ndim == 3 else ela.astype(np.float32)
+        gray_u8 = np.clip(gray, 0, 255).astype(np.uint8)
+        mask = (gray_u8 >= config.ELA_HOTSPOT_CUTOFF).astype(np.uint8)
+        count, labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        height, width = gray_u8.shape
+        boxes = []
+        for index in range(1, count):
+            x, y, w, h, area = (int(value) for value in stats[index])
+            if area < 4 or w < 1 or h < 1:
+                continue
+            region = gray[labels == index]
+            mean_error = float(region.mean()) if region.size else 0.0
+            severity = "elevated" if mean_error >= config.ELA_HOTSPOT_CUTOFF else "low"
+            boxes.append(
+                {
+                    "x": float(x / width),
+                    "y": float(y / height),
+                    "w": float(w / width),
+                    "h": float(h / height),
+                    "severity": severity,
+                    "mean_error": mean_error,
+                    "area": area,
+                }
+            )
+        boxes.sort(key=lambda item: item["area"], reverse=True)
+        for box in boxes:
+            box.pop("area", None)
+        return boxes[:limit]
+    except ElaError:
+        raise
+    except Exception as exc:
+        raise ElaError("Hotspot regions could not be computed.") from exc
+
+
 def preview_ela_image(
     image: Image.Image,
     quality: int = config.ELA_QUALITY,

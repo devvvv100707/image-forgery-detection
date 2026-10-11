@@ -62,9 +62,14 @@ def test_analyze_success_shape(client, tmp_path, monkeypatch):
         response = client.post("/api/analyze", files={"file": ("tiny.png", handle, "image/png")})
     assert response.status_code == 200
     body = response.json()
-    assert body["predicted_class"] in config.CLASS_NAMES.values()
+    assert body["predicted_class"] in {*config.CLASS_NAMES.values(), "Not sure"}
     assert 0.0 <= body["model_score"] <= 1.0
     assert body["ela_png_base64"]
+    assert body["ela_map_png_base64"]
+    assert body["label"] in {"Likely Authentic", "Potentially Manipulated", "Not sure"}
+    assert body["score"] == body["model_score"]
+    assert len(body["ela_stats"]["histogram"]) == 16
+    assert len(body["sha256"]) == 64
     assert "calibrated probability" in body["score_label"]
 
 
@@ -122,6 +127,76 @@ def test_health_and_predict_aliases(client, tmp_path, monkeypatch):
     assert high.json()["ela_scale"] == 30.0
     assert low.json()["ela_png_base64"] != high.json()["ela_png_base64"]
     assert 0.0 <= low.json()["model_score"] <= 1.0
+
+
+def test_predict_tiny_checkpoint_and_missing(client, tmp_path, monkeypatch):
+    image = tmp_path / "tiny.png"
+    Image.new("RGB", (8, 8), (12, 34, 56)).save(image, format="PNG")
+    missing = tmp_path / "missing.pt"
+    monkeypatch.setattr(config, "CHECKPOINT_PATH", missing)
+    main.service.model = None
+    main.service.ready = False
+    with image.open("rb") as handle:
+        absent = client.post("/predict", files={"file": ("tiny.png", handle, "image/png")})
+    assert absent.status_code != 500
+    assert absent.headers["content-type"].startswith("application/json")
+    assert "detail" in absent.json()
+    assert "Traceback" not in absent.text
+    assert "checkpoint" not in absent.text.lower()
+
+    checkpoint = tmp_path / "tiny.pt"
+    model = build_model(dropout=0.0)
+    torch.save({"state_dict": model.state_dict(), "dropout": 0.0}, checkpoint)
+    monkeypatch.setattr(config, "CHECKPOINT_PATH", checkpoint)
+    main.service.model = None
+    main.service.ready = False
+    with image.open("rb") as handle:
+        ready = client.post("/predict", files={"file": ("tiny.png", handle, "image/png")})
+    assert ready.status_code == 200
+    body = ready.json()
+    assert body["threshold"] == config.DECISION_THRESHOLD
+    assert isinstance(body["regions"], list)
+
+    with image.open("rb") as handle:
+        bad = client.post(
+            "/predict",
+            files={"file": ("tiny.png", handle, "image/png")},
+            data={"quality": "nope", "scale": "10"},
+        )
+    assert bad.status_code == 400
+    assert bad.headers["content-type"].startswith("application/json")
+    assert "Traceback" not in bad.text
+    assert str(tmp_path) not in bad.text
+
+
+def test_predict_without_opencv_is_json(client, tmp_path, monkeypatch):
+    checkpoint = tmp_path / "tiny.pt"
+    model = build_model(dropout=0.0)
+    torch.save({"state_dict": model.state_dict(), "dropout": 0.0}, checkpoint)
+    monkeypatch.setattr(config, "CHECKPOINT_PATH", checkpoint)
+    main.service.model = None
+    main.service.ready = False
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def guarded(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "cv2":
+            raise ImportError("No module named cv2")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded)
+    image = tmp_path / "tiny.png"
+    Image.new("RGB", (8, 8), (9, 9, 9)).save(image, format="PNG")
+    with image.open("rb") as handle:
+        response = client.post("/predict", files={"file": ("tiny.png", handle, "image/png")})
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["detail"] == "Inference failed for this image."
+    assert "Traceback" not in response.text
+    assert "cv2" not in response.text
+    assert str(tmp_path) not in response.text
 
 
 def test_dataset_status_missing(client, tmp_path, monkeypatch):

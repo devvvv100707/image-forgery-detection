@@ -1,5 +1,4 @@
 import { API_BASE, USE_MOCKS } from "./config";
-import { mockHealth, presets } from "../mocks/fixtures";
 
 export type Health = {
   status: string;
@@ -8,20 +7,42 @@ export type Health = {
   connected: boolean;
 };
 
+export type ElaRegion = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  severity: "low" | "elevated" | string;
+  mean_error: number;
+};
+
 export type PredictResult = {
   predicted_class: string;
   model_score: number;
+  score: number;
+  label: string;
+  threshold: number;
   score_label: string;
   positive_class: string;
   explanation: string;
   ela_png_base64: string;
+  ela_map_png_base64: string;
   model_ready: boolean;
   ela_quality: number;
   ela_scale: number;
-  source: "mock" | "live";
-  latency_label?: string;
-  mean_sq?: string;
-  anomaly_count?: string;
+  inference_ms: number;
+  image_width: number;
+  image_height: number;
+  file_size_bytes: number;
+  sha256: string;
+  ela_stats: {
+    mean_error: number;
+    max_error: number;
+    histogram: number[];
+    uniform_area_pct: number;
+  };
+  regions: ElaRegion[];
+  source: "live";
 };
 
 export type MetricsPayload = {
@@ -42,7 +63,6 @@ async function readError(response: Response) {
 }
 
 export async function getHealth(): Promise<Health> {
-  if (USE_MOCKS) return mockHealth;
   try {
     const response = await fetch(`${API_BASE}/health`);
     if (!response.ok) throw new Error(await readError(response));
@@ -60,7 +80,27 @@ export async function getHealth(): Promise<Health> {
 
 export async function getMetrics(): Promise<MetricsPayload> {
   if (USE_MOCKS) {
-    return { status: "mock", metrics: null, history: null, message: "Demo metrics are local fixtures." };
+    try {
+      const response = await fetch(`${API_BASE}/api/metrics`);
+      if (!response.ok) throw new Error(await readError(response));
+      const body = (await response.json()) as MetricsPayload;
+      if (body.status !== "complete" || !body.metrics) {
+        return {
+          status: "pending",
+          metrics: null,
+          history: null,
+          message: "Train the model to see results.",
+        };
+      }
+      return body;
+    } catch {
+      return {
+        status: "pending",
+        metrics: null,
+        history: null,
+        message: "Train the model to see results.",
+      };
+    }
   }
   const response = await fetch(`${API_BASE}/api/metrics`);
   if (!response.ok) throw new Error(await readError(response));
@@ -68,31 +108,12 @@ export async function getMetrics(): Promise<MetricsPayload> {
 }
 
 export async function getDatasetStatus(): Promise<Record<string, unknown>> {
-  if (USE_MOCKS) return { status: "mock", training_data_ready: false, message: "Demo dataset card." };
   const response = await fetch(`${API_BASE}/api/dataset/status`);
   if (!response.ok) throw new Error(await readError(response));
   return response.json();
 }
 
 export async function predictImage(file: File, quality: number, scale: number): Promise<PredictResult> {
-  if (USE_MOCKS) {
-    const preset = Object.values(presets).find((item) => item.fileName === file.name) ?? presets.spliced;
-    return {
-      predicted_class: preset.verdict,
-      model_score: preset.score,
-      score_label: "Demo narrative score from the reference screen. Not a measured probability.",
-      positive_class: "Potentially Manipulated",
-      explanation: preset.explanation,
-      ela_png_base64: "",
-      model_ready: true,
-      ela_quality: quality,
-      ela_scale: scale,
-      source: "mock",
-      latency_label: preset.latency,
-      mean_sq: preset.meanSq,
-      anomaly_count: preset.anomaly,
-    };
-  }
   const body = new FormData();
   body.append("file", file);
   body.append("quality", String(quality));
