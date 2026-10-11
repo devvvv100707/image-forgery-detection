@@ -24,6 +24,10 @@ How it works:
 
 Model Results fills in after `python -m src.evaluate`, and the numbers there are that run.
 
+Model Results after one CASIA evaluation.
+
+![Model Results after one CASIA evaluation](docs/images/model-results.png)
+
 ## What you need
 
 - Python 3.10 or newer
