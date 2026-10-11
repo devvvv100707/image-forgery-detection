@@ -36,6 +36,10 @@ def test_train_and_evaluate_smoke(tmp_path, monkeypatch):
         seed=2,
     )
     assert checkpoint.is_file()
+    saved = __import__("torch").load(checkpoint, map_location="cpu", weights_only=False)
+    assert saved["label_authentic"] == 0
+    assert saved["label_manipulated"] == 1
+    assert 0.0 < saved["decision_threshold"] < 1.0
     assert result["epochs"]
     assert "train_loss" in result["epochs"][0]
     assert "val_loss" in result["epochs"][0]
@@ -49,4 +53,7 @@ def test_train_and_evaluate_smoke(tmp_path, monkeypatch):
     assert metrics["status"] == "complete"
     assert metrics["test_samples"] >= 1
     assert 0.0 <= metrics["accuracy"] <= 1.0
+    assert metrics["decision_threshold"] == saved["decision_threshold"]
+    assert "balanced_accuracy" in metrics
+    assert "majority_class_accuracy" in metrics
     assert (tmp_path / "eval" / "confusion_matrix.png").is_file()

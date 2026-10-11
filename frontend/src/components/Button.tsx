@@ -1,29 +1,22 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
-type Variant = "primary" | "secondary" | "destructive" | "mono";
-
-const styles: Record<Variant, string> = {
-  primary: "bg-brand text-white hover:bg-brand-hover active:bg-brand-active",
-  secondary: "bg-white text-slate-900 border border-line hover:border-slate-300",
-  destructive: "bg-manipulated-bg text-manipulated-text border border-manipulated-border",
-  mono: "bg-slate-900 text-white font-mono text-[12px]",
-};
-
 export function Button({
-  variant = "primary",
   children,
-  shortcut,
+  variant = "primary",
   className = "",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; shortcut?: string; children: ReactNode }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary"; children: ReactNode }) {
+  const look =
+    variant === "primary"
+      ? "bg-[#4F46E5] text-white hover:bg-[#4338CA]"
+      : "bg-white text-[#0F172A] border border-[#E2E8F0] hover:bg-slate-50";
   return (
     <button
       type="button"
-      className={`inline-flex items-center justify-center gap-2 rounded-control px-4 py-2.5 text-body-md font-semibold disabled:opacity-60 ${styles[variant]} ${className}`}
+      className={`inline-flex items-center justify-center rounded-2xl px-5 py-3 text-base font-semibold disabled:opacity-60 ${look} ${className}`}
       {...props}
     >
       {children}
-      {shortcut && <span className="font-mono text-[11px] opacity-80">{shortcut}</span>}
     </button>
   );
 }
